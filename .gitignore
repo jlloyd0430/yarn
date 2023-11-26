@@ -1,0 +1,6 @@
+config.env
+node_modules
+username_pass.txt
+snapshots
+project-report.pdf
+**.DS_Store

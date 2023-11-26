@@ -1,0 +1,146 @@
+<script type="module">
+
+  import * as NftToolkit from "https://walletconnect.wildtangz.pages.dev/nft-toolkit.js";
+  import {getStakeKeyFor, selectConnectedWallet} from "https://thesparklab.pages.dev/shared.js";
+
+  const BLOCKFROST_KEY = NftToolkit.Secrets.BLOCKFROST_PROJ;
+  const LINKED_WALLETS = '<%= user.wallets || '' %>'.split(',').filter(el => el);
+
+  window.addEventListener("message", async event => {
+    // We only accept messages from ourselves
+    if (event.source != window || !event.data.type) {
+      return;
+    }
+    switch (event.data.type) {
+      case "CARDANO_DAPP_JS_CONNECT":
+        document.getElementById('wallet-container').classList.add('d-none');
+        document.getElementById('wallet-connector-loading').classList.remove('d-none');
+        document.getElementById('wallet-connector-errors').classList.add('d-none');
+        document.getElementById('wallet-connector-success').classList.add('d-none');
+        const stakeKey = await getWalletStake(BLOCKFROST_KEY);
+        try {
+          const signature = await promptForStakeSignature(BLOCKFROST_KEY);
+          await sendResponseToBackend(stakeKey, signature);
+          document.getElementById('wallet-connector-success').textContent = `Added wallet "${stakeKey}!"`;
+          document.getElementById('wallet-connector-success').classList.remove('d-none');
+          document.getElementById('wallet-removal-container').innerHTML += removalDomFor(stakeKey);
+          wireUpDeleteIcons();
+        } catch (err) {
+          document.getElementById('wallet-connector-errors').textContent = err.message;
+          document.getElementById('wallet-connector-errors').classList.remove('d-none');
+        } finally {
+          document.getElementById('wallet-connector-loading').classList.add('d-none');
+          document.getElementById('wallet-container').classList.remove('d-none');
+        }
+        break;
+      default:
+        // Unknown message, return
+        break;
+    }
+  }, false);
+
+  async function handleTrashIconClick(trashIconDom) {
+    document.getElementById('wallet-removal-errors').classList.add('d-none');
+    try {
+      await sendDeleteResponse(trashIconDom.getAttribute("data-stake-key"));
+      trashIconDom.parentNode.classList.add('d-none');
+    } catch (err) {
+      document.getElementById('wallet-removal-errors').textContent = err.message;
+      document.getElementById('wallet-removal-errors').classList.remove('d-none');
+    }
+  }
+
+  function wireUpDeleteIcons() {
+    document.querySelectorAll('.delete-wallet').forEach(element => {
+      element.addEventListener('click', e => {
+        e && e.preventDefault() && e.stopPropagation();
+        handleTrashIconClick(e.currentTarget);
+      });
+    });
+  }
+
+  function removalDomFor(wallet) {
+    return `<div class="mb-1 d-flex justify-content-between align-items-center">
+      <div>
+        ${wallet}
+      </div>
+      <div class="delete-wallet alert-message" style="cursor: pointer" data-stake-key="${wallet}">
+        <i class="fas fa-trash"></i>
+      </div>
+    </div>`;
+  }
+
+  function loadWalletDom() {
+    LINKED_WALLETS.forEach(wallet => {
+      document.getElementById('wallet-removal-container').innerHTML += removalDomFor(wallet);
+    });
+    wireUpDeleteIcons();
+
+    document.getElementById('wallet-removal-loading').classList.add('d-none');
+  }
+
+  async function getWalletStake(blockfrostKey) {
+    const lucid = await selectConnectedWallet(NftToolkit, blockfrostKey);
+    return (await getStakeKeyFor(lucid));
+  }
+
+  async function promptForStakeSignature(blockfrostKey) {
+    const lucid = await selectConnectedWallet(NftToolkit, blockfrostKey);
+    const stakeKey = await getStakeKeyFor(lucid);
+    const blockHash = await getLatestBlockHash(blockfrostKey);
+    const verificationMsg = new TextEncoder().encode(blockHash);
+    const verificationHexStr = NftToolkit.Utils.toHexStr(verificationMsg);
+    return await lucid.newMessage(stakeKey, verificationHexStr).sign();
+  }
+
+  async function getLatestBlockHash(blockfrostKey) {
+    const latestEpoch = await fetch('https://cardano-mainnet.blockfrost.io/api/v0/epochs/latest', {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        'project_id': blockfrostKey
+      }
+    }).then(res => res.json());
+    if (!latestEpoch.first_block_time) {
+      throw latestEpoch;
+    }
+    return latestEpoch.first_block_time.toString();
+  }
+
+  async function sendResponseToBackend(stakeKey, signature) {
+    const validationResponse = await fetch("/user/<%= user.username%>/add_wallet", {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        wallet: stakeKey,
+        signedMsg: signature
+      }),
+      credentials: 'include'
+    }).then(res => res.json());
+    if (validationResponse.statusCode !== 200) {
+      throw validationResponse;
+    }
+    return validationResponse.resp;
+  }
+
+  async function sendDeleteResponse(stakeKey) {
+    const validationResponse = await fetch(`/user/<%= user.username%>/remove_wallet/${stakeKey}`, {
+      method: 'DELETE',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      credentials: 'include'
+    }).then(res => res.json());
+    if (validationResponse.statusCode !== 200) {
+      throw validationResponse;
+    }
+    return validationResponse.resp;
+  }
+
+  loadWalletDom();
+
+  NftToolkit.CardanoDAppJs.initializeCardanoDApp('wallet-container');
+
+</script>
